@@ -23,123 +23,116 @@
 package kafka
 
 import (
-  "bufio"
-  "log"
-  "math/rand"
-  "net"
-  "strings"
-  "strconv"
-  "time"
+	"bufio"
+	"log"
+	"math/rand"
+	"net"
+	"strconv"
+	"strings"
+	"time"
 )
 
 const (
-  NETWORK = "tcp"
+	NETWORK = "tcp"
 )
 
-
 type TopicPartition struct {
-  Offset      uint64
-  MaxSize     uint32
-  Topic       string  
-  Partition   int  
+	Offset    uint64
+	MaxSize   uint32
+	Topic     string
+	Partition int
 }
 
 // creates a list of Topic Partitions for a single topic
-func NewTopicPartitions(topic, partstr string, offset uint64, maxSize uint32) []*TopicPartition{
-  parts := strings.Split(partstr,",")
-  partitions := make([]*TopicPartition,0)
-  for _, part := range parts {
-    partition, err := strconv.Atoi(part)
-    if err == nil {
-      tp := TopicPartition{Topic:topic,Partition:partition,Offset:offset,MaxSize:maxSize}
-      partitions = append(partitions, &tp)
-    }
-  }
-  return partitions
+func NewTopicPartitions(topic, partstr string, offset uint64, maxSize uint32) []*TopicPartition {
+	parts := strings.Split(partstr, ",")
+	partitions := make([]*TopicPartition, 0)
+	for _, part := range parts {
+		partition, err := strconv.Atoi(part)
+		if err == nil {
+			tp := TopicPartition{Topic: topic, Partition: partition, Offset: offset, MaxSize: maxSize}
+			partitions = append(partitions, &tp)
+		}
+	}
+	return partitions
 }
 
-
 type Broker struct {
-  topics  []*TopicPartition
-  hostname    string
-  Partitioner Partitioner
+	topics      []*TopicPartition
+	hostname    string
+	Partitioner Partitioner
 }
 
 func newBroker(hostname string, tp *TopicPartition) *Broker {
 
-  b := Broker{topics:[]*TopicPartition{tp}, hostname:  hostname}
-  
-  b.Partitioner = func(b *Broker) int {
-    return tp.Partition
-  }
-  return &b
- 
-}
+	b := Broker{topics: []*TopicPartition{tp}, hostname: hostname}
 
+	b.Partitioner = func(b *Broker) int {
+		return tp.Partition
+	}
+	return &b
+
+}
 
 func newMultiBroker(hostname string, tplist []*TopicPartition) *Broker {
 
-  b := Broker{topics:tplist, hostname:  hostname}
-  partitions := make([]int,len(tplist))
-  for tpct, tp := range tplist {
-    partitions[tpct] = tp.Partition
-  }
-  
-  b.Partitioner = MakeRandomPartitioner(partitions)
-  return &b
- 
+	b := Broker{topics: tplist, hostname: hostname}
+	partitions := make([]int, len(tplist))
+	for tpct, tp := range tplist {
+		partitions[tpct] = tp.Partition
+	}
+
+	b.Partitioner = MakeRandomPartitioner(partitions)
+	return &b
+
 }
 
 // creates a broker that uses random paritioner, for a single topic but many partitions
 func NewRandomPartitionedBroker(hostname string, topic string, partitions []int) *Broker {
-  tplist := make([]*TopicPartition,0)
-  for _, partition := range partitions {
-    tp := TopicPartition{Topic:topic,Partition:partition}
-    tplist = append(tplist, &tp)
-  }
-  b := Broker{hostname:   hostname, topics: tplist}
-  b.Partitioner = MakeRandomPartitioner(partitions)
-  return &b
+	tplist := make([]*TopicPartition, 0)
+	for _, partition := range partitions {
+		tp := TopicPartition{Topic: topic, Partition: partition}
+		tplist = append(tplist, &tp)
+	}
+	b := Broker{hostname: hostname, topics: tplist}
+	b.Partitioner = MakeRandomPartitioner(partitions)
+	return &b
 }
 
 // Create a Random Partitioner Func 
 func MakeRandomPartitioner(partitions []int) Partitioner {
-  rp := rand.New(rand.NewSource(time.Now().UnixNano()))
-  partitionSize := len(partitions)
-  return func(b *Broker) int {
-    return partitions[rp.Intn(partitionSize)]
-  }
+	rp := rand.New(rand.NewSource(time.Now().UnixNano()))
+	partitionSize := len(partitions)
+	return func(b *Broker) int {
+		return partitions[rp.Intn(partitionSize)]
+	}
 }
 
 func (b *Broker) connect() (conn *net.TCPConn, er error) {
-  raddr, err := net.ResolveTCPAddr(NETWORK, b.hostname)
-  if err != nil {
-    log.Println("Fatal Error: ", err)
-    return nil, err
-  }
-  conn, err = net.DialTCP(NETWORK, nil, raddr)
-  if err != nil {
-    log.Println("Fatal Error: ", err)
-    return nil, err
-  }
-  return conn, er
+	raddr, err := net.ResolveTCPAddr(NETWORK, b.hostname)
+	if err != nil {
+		log.Println("Fatal Error: ", err)
+		return nil, err
+	}
+	conn, err = net.DialTCP(NETWORK, nil, raddr)
+	if err != nil {
+		log.Println("Fatal Error: ", err)
+		return nil, err
+	}
+	return conn, er
 }
 
 // returns buffer reader for single requests
-func (b *Broker) readResponse(conn *net.TCPConn) (*ByteBuffer) {
-  reader := bufio.NewReader(conn)
-  br := NewByteBuffer(1, reader)
-  return br
+func (b *Broker) readResponse(conn *net.TCPConn) *ByteBuffer {
+	reader := bufio.NewReader(conn)
+	br := NewByteBuffer(1, reader)
+	return br
 
 }
 
 // returns buffer reader for multiple fetch requests (offsets/fetchmsgs)
-func (b *Broker) readMultiResponse(conn *net.TCPConn) (*ByteBuffer) {
-  reader := bufio.NewReader(conn)
-  br := NewByteBuffer(len(b.topics), reader)
-  return br
+func (b *Broker) readMultiResponse(conn *net.TCPConn) *ByteBuffer {
+	reader := bufio.NewReader(conn)
+	br := NewByteBuffer(len(b.topics), reader)
+	return br
 }
-
-
-
-

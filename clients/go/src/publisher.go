@@ -23,10 +23,10 @@
 package kafka
 
 import (
-  "log"
-  "net"
-  "sync"
-  "time"
+	"log"
+	"net"
+	"sync"
+	"time"
 )
 
 type MessageSender func(msg *MessageTopic)
@@ -39,96 +39,96 @@ type ProduceRequest map[string]map[int][]*MessageTopic
 
 // does this ProduceRequest contain more than one topic/partition combo?
 func (p ProduceRequest) MultiPart() bool {
-    if len(p) > 1 {
-      // > 1 topic
-      return true
-    } else {
-      // one topic, how many partitions?
-      for _, partMsgs := range p {
-        if len(partMsgs) > 1 {
-          return true
-        }
-      }
-    }
-    return false
+	if len(p) > 1 {
+		// > 1 topic
+		return true
+	} else {
+		// one topic, how many partitions?
+		for _, partMsgs := range p {
+			if len(partMsgs) > 1 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (p ProduceRequest) TopicPartCt() (ct int) {
-  for _, partMsgs := range p {
-    for _, msgs := range partMsgs {
-      if len(msgs) > 0 {
-        ct ++
-      }
-    }
-  }
-  return
+	for _, partMsgs := range p {
+		for _, msgs := range partMsgs {
+			if len(msgs) > 0 {
+				ct++
+			}
+		}
+	}
+	return
 }
 
 //type MessageSender func(topic string, partition int, *Message)
 
 type BrokerPublisher struct {
-  broker *Broker
+	broker *Broker
 }
+
 func NewBrokerPublisher(hostname string, topic string, partition int) *BrokerPublisher {
-  tp := TopicPartition{Topic:topic,Partition:partition}
-  b := newBroker(hostname,  &tp) 
-  return &BrokerPublisher{broker: b}
+	tp := TopicPartition{Topic: topic, Partition: partition}
+	b := newBroker(hostname, &tp)
+	return &BrokerPublisher{broker: b}
 }
 func NewProducer(hostname string, tplist []*TopicPartition) *BrokerPublisher {
-  b := newMultiBroker(hostname,  tplist) 
-  return &BrokerPublisher{broker: b}
+	b := newMultiBroker(hostname, tplist)
+	return &BrokerPublisher{broker: b}
 }
 
 // create a new Producer, that uses multi-produce, and random partitioner
 func NewPartitionedProducer(hostname string, topic string, partitions []int) *BrokerPublisher {
-  b := NewRandomPartitionedBroker(hostname, topic, partitions )
-  return &BrokerPublisher{broker: b}
+	b := NewRandomPartitionedBroker(hostname, topic, partitions)
+	return &BrokerPublisher{broker: b}
 }
 
-
 func (b *BrokerPublisher) Publish(message *Message) (int, error) {
-  return b.BatchPublish(message)
+	return b.BatchPublish(message)
 }
 
 func (b *BrokerPublisher) BatchPublish(messages ...*Message) (int, error) {
-  conn, err := b.broker.connect()
-  if err != nil {
-    return -1, err
-  }
-  defer conn.Close()
+	conn, err := b.broker.connect()
+	if err != nil {
+		return -1, err
+	}
+	defer conn.Close()
 
-  request := b.broker.EncodeProduceRequest(messages...)
-  num, err := conn.Write(request)
-  if err != nil {
-    return -1, err
-  }
+	request := b.broker.EncodeProduceRequest(messages...)
+	num, err := conn.Write(request)
+	if err != nil {
+		return -1, err
+	}
 
-  return num, err
+	return num, err
 }
 
 // opens a channel for publishing, blocking call
 func (b *BrokerPublisher) PublishOnChannel(msgChan chan *MessageTopic, bufferMaxMs int64, bufferMaxSize int, quit chan bool) error {
 
-  sender, conn, err := NewBufferedSender(b.broker, bufferMaxMs, bufferMaxSize)
+	sender, conn, err := NewBufferedSender(b.broker, bufferMaxMs, bufferMaxSize)
 
-  if err == nil {
+	if err == nil {
 
-    // wait for stop signal
-    go func() {
-      <-quit
-      sender(nil) // flush
-      conn.Close()
-      close(msgChan)
-    }()
+		// wait for stop signal
+		go func() {
+			<-quit
+			sender(nil) // flush
+			conn.Close()
+			close(msgChan)
+		}()
 
-    for msg := range msgChan {
-      if msg != nil {
-        sender(msg)
-      }
-    }
+		for msg := range msgChan {
+			if msg != nil {
+				sender(msg)
+			}
+		}
 
-  }
-  return err
+	}
+	return err
 
 }
 
@@ -136,95 +136,95 @@ func (b *BrokerPublisher) PublishOnChannel(msgChan chan *MessageTopic, bufferMax
 // uses a partitioner to choose partition
 func NewBufferedSender(broker *Broker, bufferMaxMs int64, bufferMaxSize int) (MessageSender, *net.TCPConn, error) {
 
-  conn, err := broker.connect()
-  if err != nil {
-    return nil, nil, err
-  }
+	conn, err := broker.connect()
+	if err != nil {
+		return nil, nil, err
+	}
 
-  msgBuffer := make(ProduceRequest)
-  var hasSent bool
-  var msgCt int
-  var defaultTopic string
-  if len(broker.topics) < 2 {
-    defaultTopic = broker.topics[0].Topic
-  }
-  msgMu := new(sync.Mutex)
-  timer := time.NewTicker(time.Duration(bufferMaxMs) * time.Millisecond)
+	msgBuffer := make(ProduceRequest)
+	var hasSent bool
+	var msgCt int
+	var defaultTopic string
+	if len(broker.topics) < 2 {
+		defaultTopic = broker.topics[0].Topic
+	}
+	msgMu := new(sync.Mutex)
+	timer := time.NewTicker(time.Duration(bufferMaxMs) * time.Millisecond)
 
-  doSend := func(msgBufCopy ProduceRequest) {
+	doSend := func(msgBufCopy ProduceRequest) {
 
-    msgMu.Lock()
-    msgCt = 0
-    msgBuffer = make(ProduceRequest)
-    msgMu.Unlock()
-    var err error
-    //if msgBufCopy.MultiPart() {
-      request := broker.EncodeMultiProduceRequest(&msgBufCopy)
-      _, err = conn.Write(request)
-    //} else {
-    //  for _, partMsgs := range msgBufCopy {
-    //    for _, msgs := range partMsgs {
-    //      request := broker.EncodeProduceRequest(msgs...)
-    //      _, err = conn.Write(request)
-    //    }
-    //  }
-    //}
+		msgMu.Lock()
+		msgCt = 0
+		msgBuffer = make(ProduceRequest)
+		msgMu.Unlock()
+		var err error
+		//if msgBufCopy.MultiPart() {
+		request := broker.EncodeMultiProduceRequest(&msgBufCopy)
+		_, err = conn.Write(request)
+		//} else {
+		//  for _, partMsgs := range msgBufCopy {
+		//    for _, msgs := range partMsgs {
+		//      request := broker.EncodeProduceRequest(msgs...)
+		//      _, err = conn.Write(request)
+		//    }
+		//  }
+		//}
 
-    if err != nil {
-      // TODO, reconnect?  
-      log.Println("potentially fatal error?", err)
-    }
-  }
+		if err != nil {
+			// TODO, reconnect?  
+			log.Println("potentially fatal error?", err)
+		}
+	}
 
-  log.Println("start buffered sender heartbeat = ", bufferMaxMs, " max queue ", bufferMaxSize)
-  go func() {
+	log.Println("start buffered sender heartbeat = ", bufferMaxMs, " max queue ", bufferMaxSize)
+	go func() {
 
-    for _ = range timer.C {
-      msgMu.Lock()
-      if msgCt > 0 && !hasSent {
-        hasSent = false
-        msgMu.Unlock()
-        doSend(msgBuffer)
-      } else {
-        msgMu.Unlock()
-      }
-      
-    }
+		for _ = range timer.C {
+			msgMu.Lock()
+			if msgCt > 0 && !hasSent {
+				hasSent = false
+				msgMu.Unlock()
+				doSend(msgBuffer)
+			} else {
+				msgMu.Unlock()
+			}
 
-  }()
+		}
 
-  return func(msg *MessageTopic) {
-    if msg == nil {
-      doSend(msgBuffer)
-      return
-    }
-    msgMu.Lock()
-    msgCt++
-    partId := msg.Partition
-    topic := defaultTopic
-    if partId == -1 {
-      // get a partition
-      partId = broker.Partitioner(broker)
-    }
-    if len(msg.Topic) > 0 {
-      topic = msg.Topic
-    }
-    //log.Println("partid = ", partId)
-    if _, ok := msgBuffer[topic]; !ok {
-      msgBuffer[topic] = make(map[int][]*MessageTopic)
-    }
-    if _, ok := msgBuffer[topic][partId]; !ok {
-      msgBuffer[topic][partId] = []*MessageTopic{}
-    } 
+	}()
 
-    msgBuffer[topic][partId] = append(msgBuffer[topic][partId], msg)
-    if msgCt > bufferMaxSize {
-      hasSent = true
-      msgMu.Unlock()
-      go doSend(msgBuffer)
-    } else {
-      msgMu.Unlock()
-    }
+	return func(msg *MessageTopic) {
+		if msg == nil {
+			doSend(msgBuffer)
+			return
+		}
+		msgMu.Lock()
+		msgCt++
+		partId := msg.Partition
+		topic := defaultTopic
+		if partId == -1 {
+			// get a partition
+			partId = broker.Partitioner(broker)
+		}
+		if len(msg.Topic) > 0 {
+			topic = msg.Topic
+		}
+		//log.Println("partid = ", partId)
+		if _, ok := msgBuffer[topic]; !ok {
+			msgBuffer[topic] = make(map[int][]*MessageTopic)
+		}
+		if _, ok := msgBuffer[topic][partId]; !ok {
+			msgBuffer[topic][partId] = []*MessageTopic{}
+		}
 
-  }, conn, nil
+		msgBuffer[topic][partId] = append(msgBuffer[topic][partId], msg)
+		if msgCt > bufferMaxSize {
+			hasSent = true
+			msgMu.Unlock()
+			go doSend(msgBuffer)
+		} else {
+			msgMu.Unlock()
+		}
+
+	}, conn, nil
 }

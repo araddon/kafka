@@ -23,13 +23,14 @@
 package kafka
 
 import (
-  "bufio"
-  "encoding/binary"
-  "errors"
-  "fmt"
-  "io"
-  "log"
+	"bufio"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"log"
 )
+
 /*
 Format of a Multi-Fetch RESPONSE
 
@@ -48,58 +49,58 @@ Format of a Multi-Fetch RESPONSE
     31 139 8 0 0 .... <payload>
 */
 
-
 // a Byte buffer is a wrapper over bufio.Reader that allows us to forward only read
 // while understanding the kafka format for bytes/lenghts, etc
 type ByteBuffer struct {
-   ct        int
-   reader    *bufio.Reader 
-   Size      uint32
-   consumed  uint32
-   //msgs   []*Message
+	ct       int
+	reader   *bufio.Reader
+	Size     uint32
+	consumed uint32
+	//msgs   []*Message
 }
+
 func NewByteBuffer(ct int, buf *bufio.Reader) *ByteBuffer {
-  b := ByteBuffer{ct: ct, reader:buf}
-  return &b
+	b := ByteBuffer{ct: ct, reader: buf}
+	return &b
 }
 
 func (b *ByteBuffer) Len() int {
-  return b.ct
+	return b.ct
 }
 
 // a pattern is uint32, followed by uint16
 func (b *ByteBuffer) firstRead() (uint32, uint16, error) {
-  
-  var err error
-  //if b.reader.Buffered() > 30 {
-  //  log.Println(b.reader.Peek(30))
-  //}
-  length := make([]byte, 4)
-  lenRead, err := io.ReadFull(b.reader, length)
-  if err != nil {
-    log.Println("invalid socket read ", err)
-    return 0, 0, err
-  }
-  if lenRead != 4 || lenRead < 0 {
-    return 0, 0, errors.New("invalid length of the packet length field")
-  }
 
-  expectedLength := binary.BigEndian.Uint32(length)
+	var err error
+	//if b.reader.Buffered() > 30 {
+	//  log.Println(b.reader.Peek(30))
+	//}
+	length := make([]byte, 4)
+	lenRead, err := io.ReadFull(b.reader, length)
+	if err != nil {
+		log.Println("invalid socket read ", err)
+		return 0, 0, err
+	}
+	if lenRead != 4 || lenRead < 0 {
+		return 0, 0, errors.New("invalid length of the packet length field")
+	}
 
-  shortBytes := make([]byte, 2)
-  lenRead, err = io.ReadFull(b.reader, shortBytes)
+	expectedLength := binary.BigEndian.Uint32(length)
 
-  if err != nil {
-    return 0, 0, err
-  }
-  if lenRead != 2 || lenRead < 0 {
-    return 0, 0, errors.New("invalid length of the short int field")
-  }
+	shortBytes := make([]byte, 2)
+	lenRead, err = io.ReadFull(b.reader, shortBytes)
 
-  shortInt := binary.BigEndian.Uint16(shortBytes)
-  //log.Println(length, shortBytes, expectedLength, shortInt)
+	if err != nil {
+		return 0, 0, err
+	}
+	if lenRead != 2 || lenRead < 0 {
+		return 0, 0, errors.New("invalid length of the short int field")
+	}
 
-  return expectedLength, shortInt, nil
+	shortInt := binary.BigEndian.Uint16(shortBytes)
+	//log.Println(length, shortBytes, expectedLength, shortInt)
+
+	return expectedLength, shortInt, nil
 
 }
 
@@ -107,110 +108,109 @@ func (b *ByteBuffer) firstRead() (uint32, uint16, error) {
 //  (first 4 bytes) and # of sets
 func (b *ByteBuffer) ReadHeader() error {
 
-  size, errorCode, err := b.firstRead() 
-  if err != nil {
-    log.Println("invalid socket read ", err)
-    return err
-  }
-  b.consumed = 2
-  b.Size = size
-  if errorCode != 0 {
-    sz := b.reader.Buffered()
-    errdump := make([]byte, sz)
-    _,_ = io.ReadFull(b.reader, errdump)
-    log.Println(string(errdump))
-    log.Println("errorCode: ",b.reader.Buffered(), size, errorCode)
-    return errors.New(fmt.Sprintf("Broker Response Error: %d", errorCode))
-  }
-  return nil
+	size, errorCode, err := b.firstRead()
+	if err != nil {
+		log.Println("invalid socket read ", err)
+		return err
+	}
+	b.consumed = 2
+	b.Size = size
+	if errorCode != 0 {
+		sz := b.reader.Buffered()
+		errdump := make([]byte, sz)
+		_, _ = io.ReadFull(b.reader, errdump)
+		log.Println(string(errdump))
+		log.Println("errorCode: ", b.reader.Buffered(), size, errorCode)
+		return errors.New(fmt.Sprintf("Broker Response Error: %d", errorCode))
+	}
+	return nil
 }
 
 // Read the length and error for this set (message/offset)
 func (b *ByteBuffer) ReadSet() (int, error) {
 
-  //log.Println(b.reader.Peek(30))
+	//log.Println(b.reader.Peek(30))
 
-  size, errorCode, err := b.firstRead() 
-  b.consumed += 6
-  if errorCode != 0 || err != nil {
-    log.Println("errorCode: ", errorCode)
-    return 0, errors.New(fmt.Sprintf("Broker Response Error: %d", errorCode))
-  }
-  return int(size), nil
-  
+	size, errorCode, err := b.firstRead()
+	b.consumed += 6
+	if errorCode != 0 || err != nil {
+		log.Println("errorCode: ", errorCode)
+		return 0, errors.New(fmt.Sprintf("Broker Response Error: %d", errorCode))
+	}
+	return int(size), nil
+
 }
 
-
 func (b *ByteBuffer) NextMsg(payloadCodecsMap map[byte]PayloadCodec) (int, []*Message, error) {
-  
-  //log.Println("about to get len", b.consumed, b.Size - b.consumed)
-  if b.Size - b.consumed < 10 {
-    //log.Println("returning, zero len?")
-    return 0,nil, nil
-  }
-  
-  //length, err := b.reader.Peek(4)
-  length := make([]byte, 4)
-  lenRead, err := io.ReadFull(b.reader, length)
-  b.consumed += 4
-  //log.Println("after len")
-  if err != nil {
-    log.Println("invalid socket read ", err)
-    return 0,nil, err
-  }
-  if lenRead != 4 {
-    return 0,nil, errors.New("invalid length of the packet length field")
-  }
 
-  expectedLength := binary.BigEndian.Uint32(length)
-  payload := make([]byte, expectedLength)
-  b.consumed += expectedLength
-  //log.Println("about to get payload")
-  lenRead, err = io.ReadFull(b.reader, payload)
-  //log.Println("after payload read", lenRead, err)
-  if err != nil {
-    return 0,nil, err
-  }
-  if uint32(lenRead) != expectedLength {
-    // this is actually an expected condition, the last message in a message 
-    // set can be a partial if maxsize was exceeded
-    return 0, nil, nil
-  }
-  //log.Println(payload, expectedLength)
-  payload = append(length, payload...)
-  payloadConsumed, msgs := Decode(payload, payloadCodecsMap)
-  if msgs == nil || len(msgs) == 0 {
-    // this isn't invalid as large messages might contain partial messages 
-    return 0, []*Message{}, err
-  }
-  
-  return int(payloadConsumed) , msgs, err
-  
+	//log.Println("about to get len", b.consumed, b.Size - b.consumed)
+	if b.Size-b.consumed < 10 {
+		//log.Println("returning, zero len?")
+		return 0, nil, nil
+	}
+
+	//length, err := b.reader.Peek(4)
+	length := make([]byte, 4)
+	lenRead, err := io.ReadFull(b.reader, length)
+	b.consumed += 4
+	//log.Println("after len")
+	if err != nil {
+		log.Println("invalid socket read ", err)
+		return 0, nil, err
+	}
+	if lenRead != 4 {
+		return 0, nil, errors.New("invalid length of the packet length field")
+	}
+
+	expectedLength := binary.BigEndian.Uint32(length)
+	payload := make([]byte, expectedLength)
+	b.consumed += expectedLength
+	//log.Println("about to get payload")
+	lenRead, err = io.ReadFull(b.reader, payload)
+	//log.Println("after payload read", lenRead, err)
+	if err != nil {
+		return 0, nil, err
+	}
+	if uint32(lenRead) != expectedLength {
+		// this is actually an expected condition, the last message in a message 
+		// set can be a partial if maxsize was exceeded
+		return 0, nil, nil
+	}
+	//log.Println(payload, expectedLength)
+	payload = append(length, payload...)
+	payloadConsumed, msgs := Decode(payload, payloadCodecsMap)
+	if msgs == nil || len(msgs) == 0 {
+		// this isn't invalid as large messages might contain partial messages 
+		return 0, []*Message{}, err
+	}
+
+	return int(payloadConsumed), msgs, err
+
 }
 
 func (b *ByteBuffer) Payload() ([]byte, error) {
-  
-  var err error
 
-  length := make([]byte, 4)
-  lenRead, err := io.ReadFull(b.reader, length)
-  if err != nil {
-    log.Println("invalid socket read ", err)
-    return []byte{}, err
-  }
-  if lenRead != 4 || lenRead < 0 {
-    return []byte{}, errors.New("invalid length of the packet length field")
-  }
+	var err error
 
-  expectedLength := binary.BigEndian.Uint32(length)
-  payload := make([]byte, expectedLength)
-  lenRead, err = io.ReadFull(b.reader, payload)
-  if err != nil {
-    return []byte{}, err
-  }
-  if lenRead != int(expectedLength) {
-    return []byte{}, errors.New("invalid length of the packet length field")
-  }
-  return payload, err
-  
+	length := make([]byte, 4)
+	lenRead, err := io.ReadFull(b.reader, length)
+	if err != nil {
+		log.Println("invalid socket read ", err)
+		return []byte{}, err
+	}
+	if lenRead != 4 || lenRead < 0 {
+		return []byte{}, errors.New("invalid length of the packet length field")
+	}
+
+	expectedLength := binary.BigEndian.Uint32(length)
+	payload := make([]byte, expectedLength)
+	lenRead, err = io.ReadFull(b.reader, payload)
+	if err != nil {
+		return []byte{}, err
+	}
+	if lenRead != int(expectedLength) {
+		return []byte{}, errors.New("invalid length of the packet length field")
+	}
+	return payload, err
+
 }
