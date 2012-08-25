@@ -94,7 +94,7 @@ func (consumer *BrokerConsumer) ConsumeOnChannel(msgChan chan *Message, pollTime
         quit <- true // force quit
         break
       }
-      time.Sleep(time.Millisecond * time.Duration(pollTimeoutMs) * 1000000)
+      time.Sleep(time.Millisecond * time.Duration(pollTimeoutMs))
     }
     done <- true
   }()
