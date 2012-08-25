@@ -46,7 +46,7 @@ func init() {
 	flag.StringVar(&topic, "topic", "test", "topic to publish to")
 	flag.IntVar(&partition, "partition", 0, "partition to publish to")
 	flag.Uint64Var(&offset, "offset", 0, "offset to start consuming from")
-	flag.UintVar(&maxSize, "maxsize", 1048576, "max size in bytes of message set to request")
+	flag.UintVar(&maxSize, "maxsize", 1048576, "max size in bytes to consume a message set")
 	flag.StringVar(&writePayloadsTo, "writeto", "", "write payloads to this file")
 	flag.BoolVar(&consumerForever, "consumeforever", false, "loop forever consuming")
 	flag.BoolVar(&printmessage, "printmessage", true, "print the message details to stdout")
@@ -60,6 +60,7 @@ func main() {
 	broker := kafka.NewBrokerConsumer(hostname, topic, partition, offset, uint32(maxSize))
 
 	var payloadFile *os.File = nil
+	var msgCt int
 	if len(writePayloadsTo) > 0 {
 		var err error
 		payloadFile, err = os.Create(writePayloadsTo)
@@ -70,8 +71,12 @@ func main() {
 	}
 
 	consumerCallback := func(msg *kafka.Message) {
+		msgCt++
 		if printmessage {
 			msg.Print()
+		} else if msgCt == 1000 {
+			fmt.Printf("Cur Offset: %d\n", msg.Offset()+msg.TotalLen())
+			msgCt = 0
 		}
 		if payloadFile != nil {
 			payloadFile.Write([]byte("Message at: " + strconv.FormatUint(msg.Offset(), 10) + "\n"))
@@ -82,8 +87,9 @@ func main() {
 
 	if consumerForever {
 		quit := make(chan bool, 1)
+
 		go func() {
-			var sigIn chan os.Signal
+			sigIn := make(chan os.Signal)
 			signal.Notify(sigIn)
 			for {
 

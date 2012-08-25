@@ -103,7 +103,7 @@ func NewBufferedSender(broker *Broker, bufferMaxMs int64, bufferMaxSize int) (Me
   doSend := func() {
     msgMu.Lock()
     var msgBufCopy []*Message
-    msgBufCopy = msgBuffer 
+    msgBufCopy = msgBuffer
     msgBuffer = make([]*Message, 0)
     msgMu.Unlock()
     request := broker.EncodePublishRequest(msgBufCopy...)
@@ -120,13 +120,12 @@ func NewBufferedSender(broker *Broker, bufferMaxMs int64, bufferMaxSize int) (Me
     for _ = range timer.C {
       msgMu.Lock()
       if len(msgBuffer) > 0 && !hasSent {
-        hasSent = false
         msgMu.Unlock()
         doSend()
       } else {
         msgMu.Unlock()
       }
-      
+      hasSent = false
     }
 
   }()

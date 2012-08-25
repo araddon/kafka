@@ -50,6 +50,12 @@ func (m *Message) Offset() uint64 {
   return m.offset
 }
 
+// the length of payload, overhead (header) + 4 bytes len
+// this value + offset should be start of next message
+func (m *Message) TotalLen() uint64 {
+  return uint64(m.totalLength) + 4
+}
+
 func (m *Message) Payload() []byte {
   return m.payload
 }
@@ -104,34 +110,59 @@ func DecodeWithDefaultCodecs(packet []byte) (uint32, []Message) {
 }
 
 func Decode(packet []byte, payloadCodecsMap map[byte]PayloadCodec) (uint32, []Message) {
+
   messages := []Message{}
+  packetLen := uint32(len(packet))
 
-  length, message := decodeMessage(packet, payloadCodecsMap)
+  if packet == nil || packetLen < 9 {
+    //log.Printf("malformed message? %d \n", len(packet))
+    return 0, nil
+  }
+  // the package can contain n number of messages
+  var msgStart uint32 = 0
 
-  if length > 0 && message != nil {
-    if message.compression != NO_COMPRESSION_ID {
-      // wonky special case for compressed messages having embedded messages
-      payloadLen := uint32(len(message.payload))
-      messageLenLeft := payloadLen
-      for messageLenLeft > 0 {
-        start := payloadLen - messageLenLeft
-        innerLen, innerMsg := decodeMessage(message.payload[start:], payloadCodecsMap)
-        messageLenLeft = messageLenLeft - innerLen - 4 // message length uint32
-        messages = append(messages, *innerMsg)
+  for msgStart <= packetLen {
+
+    if msgStart+4 > packetLen {
+      return msgStart, messages
+    }
+
+    length := binary.BigEndian.Uint32(packet[msgStart : msgStart+4])
+
+    if msgStart+4+length > packetLen {
+      // messages don't have to have complete messages
+      // so return the ammount consumed 
+      return msgStart, messages
+    }
+    message := decodeMessage(packet[msgStart:msgStart+4+length], length, payloadCodecsMap)
+    msgStart = length + msgStart + 4
+
+    if length > 0 && message != nil {
+      if message.compression != NO_COMPRESSION_ID {
+        // wonky special case for compressed messages having embedded messages
+        payloadLen := uint32(len(message.payload))
+        messageLenLeft := payloadLen
+        for messageLenLeft > 0 {
+          start := payloadLen - messageLenLeft
+          length = binary.BigEndian.Uint32(message.payload[start:])
+          innerMsg := decodeMessage(message.payload[start:start+length+4], length, payloadCodecsMap)
+          messageLenLeft = messageLenLeft - length - 4 // message length uint32
+          messages = append(messages, *innerMsg)
+        }
+      } else {
+        messages = append(messages, *message)
       }
-    } else {
-      messages = append(messages, *message)
     }
   }
 
-  return length, messages
+  return uint32(len(packet)), messages
 }
 
-func decodeMessage(packet []byte, payloadCodecsMap map[byte]PayloadCodec) (uint32, *Message) {
-  length := binary.BigEndian.Uint32(packet[0:])
-  if length > uint32(len(packet[4:])) {
-    log.Printf("length mismatch, expected at least: %X, was: %X\n", length, len(packet[4:]))
-    return 0, nil
+func decodeMessage(packet []byte, length uint32, payloadCodecsMap map[byte]PayloadCodec) *Message {
+
+  if length != uint32(len(packet[4:])) {
+    log.Printf("length mismatch, expected at least : %d, was: %d\n", length, len(packet[4:]))
+    return nil
   }
   msg := Message{}
   msg.totalLength = length
@@ -150,7 +181,7 @@ func decodeMessage(packet []byte, payloadCodecsMap map[byte]PayloadCodec) (uint3
     rawPayload = packet[10 : 10+payloadLength]
   } else {
     log.Printf("incorrect magic, expected: %X was: %X\n", MAGIC_DEFAULT, msg.magic)
-    return 0, nil
+    return nil
   }
 
   payloadChecksum := make([]byte, 4)
@@ -158,11 +189,11 @@ func decodeMessage(packet []byte, payloadCodecsMap map[byte]PayloadCodec) (uint3
   if !bytes.Equal(payloadChecksum, msg.checksum[:]) {
     msg.Print()
     log.Printf("checksum mismatch, expected: % X was: % X\n", payloadChecksum, msg.checksum[:])
-    return 0, nil
+    return nil
   }
   msg.payload = payloadCodecsMap[msg.compression].Decode(rawPayload)
 
-  return length, &msg
+  return &msg
 }
 
 func (msg *Message) Print() {
@@ -177,6 +208,7 @@ func (msg *Message) Print() {
     log.Printf("long payload, length: %d\n", len(msg.payload))
   }
   log.Printf("length: %d\n", msg.totalLength)
-  log.Printf("offset: %d\n", msg.offset)
+  log.Printf("start offset: %d\n", msg.offset)
+  log.Printf("end offset: %d\n", msg.offset+msg.TotalLen())
   log.Println("----- End Message ------")
 }

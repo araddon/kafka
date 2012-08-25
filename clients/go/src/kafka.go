@@ -37,9 +37,10 @@ const (
 )
 
 type Broker struct {
-  topic     string
-  partition int
-  hostname  string
+  topic       string
+  partition   int
+  partitions  []int
+  hostname    string
 }
 
 func newBroker(hostname string, topic string, partition int) *Broker {
@@ -48,7 +49,7 @@ func newBroker(hostname string, topic string, partition int) *Broker {
     hostname:  hostname}
 }
 
-func (b *Broker) connect() (conn *net.TCPConn, error error) {
+func (b *Broker) connect() (conn *net.TCPConn, er error) {
   raddr, err := net.ResolveTCPAddr(NETWORK, b.hostname)
   if err != nil {
     log.Println("Fatal Error: ", err)
@@ -59,7 +60,7 @@ func (b *Broker) connect() (conn *net.TCPConn, error error) {
     log.Println("Fatal Error: ", err)
     return nil, err
   }
-  return conn, error
+  return conn, er
 }
 
 // returns length of response & payload & err
@@ -68,6 +69,7 @@ func (b *Broker) readResponse(conn *net.TCPConn) (uint32, []byte, error) {
   length := make([]byte, 4)
   lenRead, err := io.ReadFull(reader, length)
   if err != nil {
+    log.Println("invalid socket read ", err)
     return 0, []byte{}, err
   }
   if lenRead != 4 || lenRead < 0 {

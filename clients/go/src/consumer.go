@@ -24,7 +24,6 @@ package kafka
 
 import (
   "encoding/binary"
-  "errors"
   "io"
   "log"
   "net"
@@ -94,7 +93,7 @@ func (consumer *BrokerConsumer) ConsumeOnChannel(msgChan chan *Message, pollTime
         quit <- true // force quit
         break
       }
-      time.Sleep(time.Millisecond * time.Duration(pollTimeoutMs))
+      time.Sleep(time.Duration(pollTimeoutMs) * time.Millisecond * 1000000)
     }
     done <- true
   }()
@@ -127,6 +126,7 @@ func (consumer *BrokerConsumer) Consume(handlerFunc MessageHandlerFunc) (int, er
 func (consumer *BrokerConsumer) consumeWithConn(conn *net.TCPConn, handlerFunc MessageHandlerFunc) (int, error) {
   _, err := conn.Write(consumer.broker.EncodeConsumeRequest(consumer.offset, consumer.maxSize))
   if err != nil {
+    log.Println("Fatal Error: ", err)
     return -1, err
   }
 
@@ -141,19 +141,25 @@ func (consumer *BrokerConsumer) consumeWithConn(conn *net.TCPConn, handlerFunc M
     // parse out the messages
     var currentOffset uint64 = 0
     for currentOffset <= uint64(length-4) {
-      totalLength, msgs := Decode(payload[currentOffset:], consumer.codecs)
-      if msgs == nil {
-        return num, errors.New("Error Decoding Message")
+
+      payloadConsumed, msgs := Decode(payload[currentOffset:], consumer.codecs)
+      if msgs == nil || len(msgs) == 0 {
+        // this isn't invalid as large messages might contain partial messages 
+        consumer.offset += currentOffset
+        return num, err
       }
       msgOffset := consumer.offset + currentOffset
+
       for _, msg := range msgs {
         // update all of the messages offset
         // multiple messages can be at the same offset (compressed for example)
+
         msg.offset = msgOffset
+        msgOffset += 4 + uint64(msg.totalLength)
         handlerFunc(&msg)
         num += 1
       }
-      currentOffset += uint64(4 + totalLength)
+      currentOffset += uint64(payloadConsumed)
     }
     // update the broker's offset for next consumption
     consumer.offset += currentOffset
