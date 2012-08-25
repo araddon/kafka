@@ -43,8 +43,16 @@ type Message struct {
   payload     []byte
   offset      uint64 // only used after decoding
   totalLength uint32 // total length of the raw message (from decoding)
-
 }
+
+// Used for sending messages
+type MessageTopic struct {
+  Topic       string
+  Partition   int
+  Message     *Message
+}
+
+
 
 func (m *Message) Offset() uint64 {
   return m.offset
@@ -78,6 +86,17 @@ func NewMessage(payload []byte) *Message {
   return NewMessageWithCodec(payload, DefaultCodecsMap[NO_COMPRESSION_ID])
 }
 
+// a message for a specific topic
+func NewMessageTopic(topic string, payload []byte) *MessageTopic {
+  m := NewMessageWithCodec(payload, DefaultCodecsMap[NO_COMPRESSION_ID])
+  return &MessageTopic{Topic:topic,Message:m,Partition:-1}
+}
+// a message for sending, no topic, assumes you only have one topic
+func NewSendMessage(payload []byte) *MessageTopic {
+  m := NewMessageWithCodec(payload, DefaultCodecsMap[NO_COMPRESSION_ID])
+  return &MessageTopic{Topic:"",Message:m,Partition:-1}
+}
+
 // Create a Message using the default compression method (gzip)
 func NewCompressedMessage(payload []byte) *Message {
   return NewCompressedMessages(NewMessage(payload))
@@ -98,20 +117,20 @@ func (m *Message) Encode() []byte {
   binary.BigEndian.PutUint32(msg[0:], uint32(msgLen))
   msg[4] = m.magic
   msg[5] = m.compression
-
+  m.totalLength = uint32(msgLen) 
   copy(msg[6:], m.checksum[0:])
   copy(msg[10:], m.payload)
 
   return msg
 }
 
-func DecodeWithDefaultCodecs(packet []byte) (uint32, []Message) {
+func DecodeWithDefaultCodecs(packet []byte) (uint32, []*Message) {
   return Decode(packet, DefaultCodecsMap)
 }
 
-func Decode(packet []byte, payloadCodecsMap map[byte]PayloadCodec) (uint32, []Message) {
+func Decode(packet []byte, payloadCodecsMap map[byte]PayloadCodec) (uint32, []*Message) {
 
-  messages := []Message{}
+  messages := []*Message{}
   packetLen := uint32(len(packet))
 
   if packet == nil || packetLen < 9 {
@@ -147,10 +166,10 @@ func Decode(packet []byte, payloadCodecsMap map[byte]PayloadCodec) (uint32, []Me
           length = binary.BigEndian.Uint32(message.payload[start:])
           innerMsg := decodeMessage(message.payload[start:start+length+4], length, payloadCodecsMap)
           messageLenLeft = messageLenLeft - length - 4 // message length uint32
-          messages = append(messages, *innerMsg)
+          messages = append(messages, innerMsg)
         }
       } else {
-        messages = append(messages, *message)
+        messages = append(messages, message)
       }
     }
   }
@@ -202,7 +221,7 @@ func (msg *Message) Print() {
   log.Printf("compression: %X\n", msg.compression)
   log.Printf("checksum: %X\n", msg.checksum)
   if len(msg.payload) < 1048576 { // 1 MB 
-    log.Printf("payload: % X\n", msg.payload)
+    //log.Printf("payload: % X\n", msg.payload)
     log.Printf("payload(string): %s\n", msg.PayloadString())
   } else {
     log.Printf("long payload, length: %d\n", len(msg.payload))

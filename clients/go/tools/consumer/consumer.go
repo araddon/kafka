@@ -25,16 +25,19 @@ package main
 import (
 	"flag"
 	"fmt"
-	kafka "github.com/apache/kafka/clients/go/src"
+	"log"
 	"os"
-	"os/signal"
+	//"os/signal"
+	kafka "github.com/apache/kafka/clients/go/src"
 	"strconv"
-	"syscall"
+	"strings"
+	"time"
+	//"syscall"
 )
 
 var hostname string
 var topic string
-var partition int
+var partitionstr string
 var offset uint64
 var maxSize uint
 var writePayloadsTo string
@@ -44,20 +47,33 @@ var printmessage bool
 func init() {
 	flag.StringVar(&hostname, "hostname", "localhost:9092", "host:port string for the kafka server")
 	flag.StringVar(&topic, "topic", "test", "topic to publish to")
-	flag.IntVar(&partition, "partition", 0, "partition to publish to")
+	flag.StringVar(&partitionstr, "partitions", "0", "partitions to publish to:  comma delimited")
 	flag.Uint64Var(&offset, "offset", 0, "offset to start consuming from")
 	flag.UintVar(&maxSize, "maxsize", 1048576, "max size in bytes to consume a message set")
 	flag.StringVar(&writePayloadsTo, "writeto", "", "write payloads to this file")
-	flag.BoolVar(&consumerForever, "consumeforever", false, "loop forever consuming")
-	flag.BoolVar(&printmessage, "printmessage", true, "print the message details to stdout")
+	flag.BoolVar(&consumerForever, "consumeforever", true, "loop forever consuming")
+	flag.BoolVar(&printmessage, "print", true, "print the message details to stdout")
+	log.SetOutput(os.Stdout)
+	log.SetFlags(log.Ltime | log.Lshortfile)
 }
 
 func main() {
 	flag.Parse()
 	fmt.Println("Consuming Messages :")
-	fmt.Printf("From: %s, topic: %s, partition: %d\n", hostname, topic, partition)
+	fmt.Printf("From: %s, topic: %s, partitions: %s\n", hostname, topic, partitionstr)
+	log.Println("printing ?", printmessage)
+	//panic("wt")
 	fmt.Println(" ---------------------- ")
-	broker := kafka.NewBrokerConsumer(hostname, topic, partition, offset, uint32(maxSize))
+	var broker *kafka.BrokerConsumer
+
+	parts := strings.Split(partitionstr, ",")
+	if len(parts) > 1 {
+		tps := kafka.NewTopicPartitions(topic, partitionstr, offset, uint32(maxSize))
+		broker = kafka.NewMultiConsumer(hostname, tps)
+	} else {
+		partition, _ := strconv.Atoi(partitionstr)
+		broker = kafka.NewBrokerConsumer(hostname, topic, partition, offset, uint32(maxSize))
+	}
 
 	var payloadFile *os.File = nil
 	var msgCt int
@@ -69,14 +85,17 @@ func main() {
 			payloadFile = nil
 		}
 	}
-
-	consumerCallback := func(msg *kafka.Message) {
+	var consumerCallback kafka.MessageHandlerFunc
+	consumerCallback = func(topic string, partition int, msg *kafka.Message) {
 		msgCt++
 		if printmessage {
 			msg.Print()
 		} else if msgCt == 1000 {
 			fmt.Printf("Cur Offset: %d\n", msg.Offset()+msg.TotalLen())
 			msgCt = 0
+		}
+		if msgCt == 10 {
+			//panic("out")
 		}
 		if payloadFile != nil {
 			payloadFile.Write([]byte("Message at: " + strconv.FormatUint(msg.Offset(), 10) + "\n"))
@@ -86,33 +105,61 @@ func main() {
 	}
 
 	if consumerForever {
-		quit := make(chan bool, 1)
 
-		go func() {
-			sigIn := make(chan os.Signal)
-			signal.Notify(sigIn)
-			for {
+		//quit := make(chan bool, 1)
+		done := make(chan bool, 1)
+		msgChan := make(chan *kafka.Message)
+		/*
+		   go func() {
+		     var sigIn chan os.Signal = make(chan os.Signal,1)
+		     signal.Notify(sigIn)
+		     for {
 
-				select {
-				case sig := <-sigIn:
-					if sig.(os.Signal) == syscall.SIGINT {
-						quit <- true
-					} else {
-						fmt.Println(sig)
-					}
+		       select {
+		       case <-quit:
+		         log.Println("got quit, shutting down")
+		         close(msgChan)
+		         return
+		       case sig := <-sigIn:
+		         if sig.(os.Signal) == syscall.SIGINT {
+		           done <- true
+		         } else {
+		           fmt.Println(sig)
+		         }
+		       }
+		     }
+		   }()
+		*/
+		// lets try restarting this every 1 minute to see if it works?
+		timer := time.NewTicker(time.Second * 20)
+		runConsumer := func(donech chan bool, mch chan *kafka.Message) {
+			partition, _ := strconv.Atoi(partitionstr)
+			log.Println(hostname, topic, partition, offset, uint32(maxSize))
+			brok := kafka.NewBrokerConsumer(hostname, topic, partition, offset, uint32(maxSize))
+			go brok.ConsumeOnChannel(mch, 1000, donech)
+			for msg := range mch {
+				if msg != nil {
+					consumerCallback(topic, 0, msg)
+				} else {
+					break
 				}
 			}
-		}()
-
-		msgChan := make(chan *kafka.Message)
-		go broker.ConsumeOnChannel(msgChan, 10, quit)
-		for msg := range msgChan {
-			if msg != nil {
-				consumerCallback(msg)
-			} else {
-				break
-			}
 		}
+		//go func() {
+		go runConsumer(done, msgChan)
+		for _ = range timer.C {
+			// old done channel? 
+			log.Println("about to send done signal!")
+			done <- true
+			log.Println("after done signal")
+			time.Sleep(time.Second * 2)
+			done = make(chan bool, 1)
+			mch := make(chan *kafka.Message)
+			log.Println("restarting")
+			runConsumer(done, mch)
+		}
+		//}()
+
 	} else {
 		broker.Consume(consumerCallback)
 	}

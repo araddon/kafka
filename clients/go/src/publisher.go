@@ -29,15 +29,62 @@ import (
   "time"
 )
 
-type MessageSender func(*Message)
+type MessageSender func(msg *MessageTopic)
+
+// an interface for a partitioner that chooses from available partitions
+type Partitioner func(*Broker) int
+
+// a produce request with multiple partitions
+type ProduceRequest map[string]map[int][]*MessageTopic
+
+// does this ProduceRequest contain more than one topic/partition combo?
+func (p ProduceRequest) MultiPart() bool {
+    if len(p) > 1 {
+      // > 1 topic
+      return true
+    } else {
+      // one topic, how many partitions?
+      for _, partMsgs := range p {
+        if len(partMsgs) > 1 {
+          return true
+        }
+      }
+    }
+    return false
+}
+
+func (p ProduceRequest) TopicPartCt() (ct int) {
+  for _, partMsgs := range p {
+    for _, msgs := range partMsgs {
+      if len(msgs) > 0 {
+        ct ++
+      }
+    }
+  }
+  return
+}
+
+//type MessageSender func(topic string, partition int, *Message)
 
 type BrokerPublisher struct {
   broker *Broker
 }
-
 func NewBrokerPublisher(hostname string, topic string, partition int) *BrokerPublisher {
-  return &BrokerPublisher{broker: newBroker(hostname, topic, partition)}
+  tp := TopicPartition{Topic:topic,Partition:partition}
+  b := newBroker(hostname,  &tp) 
+  return &BrokerPublisher{broker: b}
 }
+func NewProducer(hostname string, tplist []*TopicPartition) *BrokerPublisher {
+  b := newMultiBroker(hostname,  tplist) 
+  return &BrokerPublisher{broker: b}
+}
+
+// create a new Producer, that uses multi-produce, and random partitioner
+func NewPartitionedProducer(hostname string, topic string, partitions []int) *BrokerPublisher {
+  b := NewRandomPartitionedBroker(hostname, topic, partitions )
+  return &BrokerPublisher{broker: b}
+}
+
 
 func (b *BrokerPublisher) Publish(message *Message) (int, error) {
   return b.BatchPublish(message)
@@ -49,8 +96,8 @@ func (b *BrokerPublisher) BatchPublish(messages ...*Message) (int, error) {
     return -1, err
   }
   defer conn.Close()
-  // TODO: MULTIPRODUCE
-  request := b.broker.EncodePublishRequest(messages...)
+
+  request := b.broker.EncodeProduceRequest(messages...)
   num, err := conn.Write(request)
   if err != nil {
     return -1, err
@@ -60,7 +107,7 @@ func (b *BrokerPublisher) BatchPublish(messages ...*Message) (int, error) {
 }
 
 // opens a channel for publishing, blocking call
-func (b *BrokerPublisher) PublishOnChannel(msgChan chan *Message, bufferMaxMs int64, bufferMaxSize int, quit chan bool) error {
+func (b *BrokerPublisher) PublishOnChannel(msgChan chan *MessageTopic, bufferMaxMs int64, bufferMaxSize int, quit chan bool) error {
 
   sender, conn, err := NewBufferedSender(b.broker, bufferMaxMs, bufferMaxSize)
 
@@ -86,6 +133,7 @@ func (b *BrokerPublisher) PublishOnChannel(msgChan chan *Message, bufferMaxMs in
 }
 
 // Buffered Sender, buffers messages for max time, and max size
+// uses a partitioner to choose partition
 func NewBufferedSender(broker *Broker, bufferMaxMs int64, bufferMaxSize int) (MessageSender, *net.TCPConn, error) {
 
   conn, err := broker.connect()
@@ -93,24 +141,38 @@ func NewBufferedSender(broker *Broker, bufferMaxMs int64, bufferMaxSize int) (Me
     return nil, nil, err
   }
 
-  msgBuffer := make([]*Message, 0)
-
+  msgBuffer := make(ProduceRequest)
   var hasSent bool
-
+  var msgCt int
+  var defaultTopic string
+  if len(broker.topics) < 2 {
+    defaultTopic = broker.topics[0].Topic
+  }
   msgMu := new(sync.Mutex)
   timer := time.NewTicker(time.Duration(bufferMaxMs) * time.Millisecond)
 
-  doSend := func() {
+  doSend := func(msgBufCopy ProduceRequest) {
+
     msgMu.Lock()
-    var msgBufCopy []*Message
-    msgBufCopy = msgBuffer
-    msgBuffer = make([]*Message, 0)
+    msgCt = 0
+    msgBuffer = make(ProduceRequest)
     msgMu.Unlock()
-    request := broker.EncodePublishRequest(msgBufCopy...)
-    _, err := conn.Write(request)
+    var err error
+    //if msgBufCopy.MultiPart() {
+      request := broker.EncodeMultiProduceRequest(&msgBufCopy)
+      _, err = conn.Write(request)
+    //} else {
+    //  for _, partMsgs := range msgBufCopy {
+    //    for _, msgs := range partMsgs {
+    //      request := broker.EncodeProduceRequest(msgs...)
+    //      _, err = conn.Write(request)
+    //    }
+    //  }
+    //}
+
     if err != nil {
-      // ? panic?
-      log.Println("potentially fatal error?")
+      // TODO, reconnect?  
+      log.Println("potentially fatal error?", err)
     }
   }
 
@@ -119,28 +181,47 @@ func NewBufferedSender(broker *Broker, bufferMaxMs int64, bufferMaxSize int) (Me
 
     for _ = range timer.C {
       msgMu.Lock()
-      if len(msgBuffer) > 0 && !hasSent {
+      if msgCt > 0 && !hasSent {
+        hasSent = false
         msgMu.Unlock()
-        doSend()
+        doSend(msgBuffer)
       } else {
         msgMu.Unlock()
       }
-      hasSent = false
+      
     }
 
   }()
 
-  return func(msg *Message) {
+  return func(msg *MessageTopic) {
     if msg == nil {
-      doSend()
+      doSend(msgBuffer)
       return
     }
     msgMu.Lock()
-    msgBuffer = append(msgBuffer, msg)
-    if len(msgBuffer) >= bufferMaxSize {
+    msgCt++
+    partId := msg.Partition
+    topic := defaultTopic
+    if partId == -1 {
+      // get a partition
+      partId = broker.Partitioner(broker)
+    }
+    if len(msg.Topic) > 0 {
+      topic = msg.Topic
+    }
+    //log.Println("partid = ", partId)
+    if _, ok := msgBuffer[topic]; !ok {
+      msgBuffer[topic] = make(map[int][]*MessageTopic)
+    }
+    if _, ok := msgBuffer[topic][partId]; !ok {
+      msgBuffer[topic][partId] = []*MessageTopic{}
+    } 
+
+    msgBuffer[topic][partId] = append(msgBuffer[topic][partId], msg)
+    if msgCt > bufferMaxSize {
       hasSent = true
       msgMu.Unlock()
-      go doSend()
+      go doSend(msgBuffer)
     } else {
       msgMu.Unlock()
     }

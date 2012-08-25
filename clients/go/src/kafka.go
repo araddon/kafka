@@ -24,29 +24,91 @@ package kafka
 
 import (
   "bufio"
-  "encoding/binary"
-  "errors"
-  "fmt"
-  "io"
   "log"
+  "math/rand"
   "net"
+  "strings"
+  "strconv"
+  "time"
 )
 
 const (
   NETWORK = "tcp"
 )
 
-type Broker struct {
-  topic       string
-  partition   int
-  partitions  []int
-  hostname    string
+
+type TopicPartition struct {
+  Offset      uint64
+  MaxSize     uint32
+  Topic       string  
+  Partition   int  
 }
 
-func newBroker(hostname string, topic string, partition int) *Broker {
-  return &Broker{topic: topic,
-    partition: partition,
-    hostname:  hostname}
+// creates a list of Topic Partitions for a single topic
+func NewTopicPartitions(topic, partstr string, offset uint64, maxSize uint32) []*TopicPartition{
+  parts := strings.Split(partstr,",")
+  partitions := make([]*TopicPartition,0)
+  for _, part := range parts {
+    partition, err := strconv.Atoi(part)
+    if err == nil {
+      tp := TopicPartition{Topic:topic,Partition:partition,Offset:offset,MaxSize:maxSize}
+      partitions = append(partitions, &tp)
+    }
+  }
+  return partitions
+}
+
+
+type Broker struct {
+  topics  []*TopicPartition
+  hostname    string
+  Partitioner Partitioner
+}
+
+func newBroker(hostname string, tp *TopicPartition) *Broker {
+
+  b := Broker{topics:[]*TopicPartition{tp}, hostname:  hostname}
+  
+  b.Partitioner = func(b *Broker) int {
+    return tp.Partition
+  }
+  return &b
+ 
+}
+
+
+func newMultiBroker(hostname string, tplist []*TopicPartition) *Broker {
+
+  b := Broker{topics:tplist, hostname:  hostname}
+  partitions := make([]int,len(tplist))
+  for tpct, tp := range tplist {
+    partitions[tpct] = tp.Partition
+  }
+  
+  b.Partitioner = MakeRandomPartitioner(partitions)
+  return &b
+ 
+}
+
+// creates a broker that uses random paritioner, for a single topic but many partitions
+func NewRandomPartitionedBroker(hostname string, topic string, partitions []int) *Broker {
+  tplist := make([]*TopicPartition,0)
+  for _, partition := range partitions {
+    tp := TopicPartition{Topic:topic,Partition:partition}
+    tplist = append(tplist, &tp)
+  }
+  b := Broker{hostname:   hostname, topics: tplist}
+  b.Partitioner = MakeRandomPartitioner(partitions)
+  return &b
+}
+
+// Create a Random Partitioner Func 
+func MakeRandomPartitioner(partitions []int) Partitioner {
+  rp := rand.New(rand.NewSource(time.Now().UnixNano()))
+  partitionSize := len(partitions)
+  return func(b *Broker) int {
+    return partitions[rp.Intn(partitionSize)]
+  }
 }
 
 func (b *Broker) connect() (conn *net.TCPConn, er error) {
@@ -63,35 +125,21 @@ func (b *Broker) connect() (conn *net.TCPConn, er error) {
   return conn, er
 }
 
-// returns length of response & payload & err
-func (b *Broker) readResponse(conn *net.TCPConn) (uint32, []byte, error) {
+// returns buffer reader for single requests
+func (b *Broker) readResponse(conn *net.TCPConn) (*ByteBuffer) {
   reader := bufio.NewReader(conn)
-  length := make([]byte, 4)
-  lenRead, err := io.ReadFull(reader, length)
-  if err != nil {
-    log.Println("invalid socket read ", err)
-    return 0, []byte{}, err
-  }
-  if lenRead != 4 || lenRead < 0 {
-    return 0, []byte{}, errors.New("invalid length of the packet length field")
-  }
+  br := NewByteBuffer(1, reader)
+  return br
 
-  expectedLength := binary.BigEndian.Uint32(length)
-  messages := make([]byte, expectedLength)
-  lenRead, err = io.ReadFull(reader, messages)
-  if err != nil {
-    return 0, []byte{}, err
-  }
-
-  if uint32(lenRead) != expectedLength {
-    return 0, []byte{}, errors.New(fmt.Sprintf("Fatal Error: Unexpected Length: %d  expected:  %d", lenRead, expectedLength))
-  }
-
-  errorCode := binary.BigEndian.Uint16(messages[0:2])
-  if errorCode != 0 {
-    log.Println("errorCode: ", errorCode)
-    return 0, []byte{}, errors.New(
-      fmt.Sprintf("Broker Response Error: %d", errorCode))
-  }
-  return expectedLength, messages[2:], nil
 }
+
+// returns buffer reader for multiple fetch requests (offsets/fetchmsgs)
+func (b *Broker) readMultiResponse(conn *net.TCPConn) (*ByteBuffer) {
+  reader := bufio.NewReader(conn)
+  br := NewByteBuffer(len(b.topics), reader)
+  return br
+}
+
+
+
+

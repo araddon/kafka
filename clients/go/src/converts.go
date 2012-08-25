@@ -32,9 +32,9 @@ func uint16bytes(value int) []byte {
   return result
 }
 
-func uint32bytes(value int) []byte {
+func uint32bytes(value uint32) []byte {
   result := make([]byte, 4)
-  binary.BigEndian.PutUint32(result, uint32(value))
+  binary.BigEndian.PutUint32(result, value)
   return result
 }
 
@@ -48,4 +48,14 @@ func uint64ToUint64bytes(value uint64) []byte {
   result := make([]byte, 8)
   binary.BigEndian.PutUint64(result, value)
   return result
+}
+
+func intfrom2bytes(b []byte) int {
+  return int(binary.BigEndian.Uint16(b))
+}
+func intfrom4bytes(b []byte) int {
+  return int(binary.BigEndian.Uint32(b))
+}
+func uint32from4bytes(b []byte) uint32 {
+  return binary.BigEndian.Uint32(b)
 }
