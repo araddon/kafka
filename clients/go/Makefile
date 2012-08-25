@@ -19,7 +19,7 @@ tools: force
 	make -C tools/offsets clean all
 
 format:
-	gofmt -w -tabwidth=2 -tabindent=false src/*.go tools/consumer/*.go  tools/publisher/*.go kafka_test.go
+	gofmt -w -tabwidth=2 -tabs=false src/*.go tools/consumer/*.go  tools/publisher/*.go kafka_test.go
 
 full: format clean install tools
 
