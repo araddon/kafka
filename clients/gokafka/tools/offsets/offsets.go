@@ -25,7 +25,7 @@ package main
 import (
 	"flag"
 	"fmt"
-	kafka "github.com/apache/kafka/clients/go/src"
+	kafka "github.com/apache/kafka/clients/gokafka"
 )
 
 var hostname string

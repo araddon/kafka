@@ -26,7 +26,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	kafka "github.com/apache/kafka/clients/go/src"
+	kafka "github.com/apache/kafka/clients/gokafka"
 	"log"
 	"os"
 )

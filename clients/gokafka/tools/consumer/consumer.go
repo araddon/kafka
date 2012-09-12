@@ -28,7 +28,7 @@ import (
 	"log"
 	"os"
 	//"os/signal"
-	kafka "github.com/apache/kafka/clients/go/src"
+	kafka "github.com/apache/kafka/clients/gokafka"
 	"strconv"
 	"strings"
 	"time"
