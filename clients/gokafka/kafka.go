@@ -111,12 +111,12 @@ func MakeRandomPartitioner(partitions []int) Partitioner {
 func (b *Broker) connect() (conn *net.TCPConn, er error) {
 	raddr, err := net.ResolveTCPAddr(NETWORK, b.hostname)
 	if err != nil {
-		log.Println("Fatal Error: ", err)
+		log.Println("Fatal Error: ", b.hostname, " ", err)
 		return nil, err
 	}
 	conn, err = net.DialTCP(NETWORK, nil, raddr)
 	if err != nil {
-		log.Println("Fatal Error: ", err)
+		log.Println("Fatal Error: ", raddr, " ", err)
 		return nil, err
 	}
 	return conn, er

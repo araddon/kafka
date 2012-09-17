@@ -110,20 +110,15 @@ func (b *ByteBuffer) ReadHeader() error {
 
 	size, errorCode, err := b.firstRead()
 	if err != nil {
-		log.Println("invalid socket read ", err)
 		return err
 	}
-	b.consumed = 2
-	b.Size = size
-	if errorCode != 0 {
-		sz := b.reader.Buffered()
-		errdump := make([]byte, sz)
-		_, _ = io.ReadFull(b.reader, errdump)
-		log.Println(string(errdump))
-		log.Println("errorCode: ", b.reader.Buffered(), size, errorCode)
-		return errors.New(fmt.Sprintf("Broker Response Error: %d", errorCode))
+
+	if errorCode == 0 {
+		b.consumed = 2
+		b.Size = size
+		return nil
 	}
-	return nil
+	return errors.New("could not read header")
 }
 
 // Read the length and error for this set (message/offset)
@@ -142,8 +137,6 @@ func (b *ByteBuffer) ReadSet() (int, error) {
 }
 
 func (b *ByteBuffer) NextMsg(payloadCodecsMap map[byte]PayloadCodec) (int, []*Message, error) {
-
-	//log.Println("about to get len", b.consumed, b.Size - b.consumed)
 	if b.Size-b.consumed < 10 {
 		//log.Println("returning, zero len?")
 		return 0, nil, nil
@@ -163,20 +156,28 @@ func (b *ByteBuffer) NextMsg(payloadCodecsMap map[byte]PayloadCodec) (int, []*Me
 	}
 
 	expectedLength := binary.BigEndian.Uint32(length)
+	if expectedLength > b.Size-b.consumed {
+		// this is actually an expected condition, the last message in a message 
+		// set can be a partial if more than maxsize was available
+		// but we need to read/flush out the remainig buffer on the conn
+		bDump := make([]byte, b.Size-b.consumed)
+		_, _ = io.ReadFull(b.reader, bDump)
+		return 0, nil, nil
+	}
 	payload := make([]byte, expectedLength)
-	b.consumed += expectedLength
-	//log.Println("about to get payload")
+	//log.Println("about to get payload ", expectedLength, " ", b.reader.Buffered())
 	lenRead, err = io.ReadFull(b.reader, payload)
-	//log.Println("after payload read", lenRead, err)
+	//log.Println("after payload read", lenRead, " =? ", expectedLength, " ", err)
 	if err != nil {
 		return 0, nil, err
 	}
 	if uint32(lenRead) != expectedLength {
-		// this is actually an expected condition, the last message in a message 
-		// set can be a partial if maxsize was exceeded
-		return 0, nil, nil
+		log.Println("\033[0m\033[31m", lenRead, " ", expectedLength, "\033[0m")
+		return 0, nil, errors.New("Did not read enough data from buffer?")
 	}
+	b.consumed += expectedLength
 	//log.Println(payload, expectedLength)
+	// TODO, revamp Decode to not read len (seperate payload/len)
 	payload = append(length, payload...)
 	payloadConsumed, msgs := Decode(payload, payloadCodecsMap)
 	if msgs == nil || len(msgs) == 0 {

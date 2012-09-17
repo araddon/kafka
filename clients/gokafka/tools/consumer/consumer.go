@@ -29,6 +29,7 @@ import (
 	"os"
 	//"os/signal"
 	kafka "github.com/apache/kafka/clients/gokafka"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,7 @@ var topic string
 var partitionstr string
 var offset uint64
 var maxSize uint
+var maxMsgCt uint64
 var writePayloadsTo string
 var consumerForever bool
 var printmessage bool
@@ -50,6 +52,7 @@ func init() {
 	flag.StringVar(&partitionstr, "partitions", "0", "partitions to publish to:  comma delimited")
 	flag.Uint64Var(&offset, "offset", 0, "offset to start consuming from")
 	flag.UintVar(&maxSize, "maxsize", 1048576, "max size in bytes to consume a message set")
+	flag.Uint64Var(&maxMsgCt, "msgct", math.MaxUint64, "max number of messages to read")
 	flag.StringVar(&writePayloadsTo, "writeto", "", "write payloads to this file")
 	flag.BoolVar(&consumerForever, "consumeforever", true, "loop forever consuming")
 	flag.BoolVar(&printmessage, "print", true, "print the message details to stdout")
@@ -72,7 +75,10 @@ func main() {
 		broker = kafka.NewMultiConsumer(hostname, tps)
 	} else {
 		partition, _ := strconv.Atoi(partitionstr)
+		//parti := []int{partition}
 		broker = kafka.NewBrokerConsumer(hostname, topic, partition, offset, uint32(maxSize))
+		//log.Printf("Kafka Consume: h=%s t='%s' Offset=%d parts=%v max=%d", hostname, topic, offset, parti, maxSize)
+		//broker = kafka.NewConsumerPartitions(hostname, topic, parti, offset, uint32(maxSize))
 	}
 
 	var payloadFile *os.File = nil
@@ -88,6 +94,9 @@ func main() {
 	var consumerCallback kafka.MessageHandlerFunc
 	consumerCallback = func(topic string, partition int, msg *kafka.Message) {
 		msgCt++
+		if uint64(msgCt) > maxMsgCt {
+			panic("ending")
+		}
 		if printmessage {
 			msg.Print()
 		} else if msgCt == 1000 {

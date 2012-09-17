@@ -100,7 +100,7 @@ func (consumer *BrokerConsumer) ConsumeOnChannel(msgChan chan *Message, pollTime
 				return
 			}
 			//tp := consumer.broker.topics[0]
-			//log.Println("about to poll for consume", tp.Topic, tp.Partition, tp.Offset)
+			//log.Println("about to poll for consume ", pollTimeoutMs)
 			_, err := consumer.consumeWithConn(conn, func(topic string, partition int, msg *Message) {
 				msgChan <- msg
 				num += 1
@@ -162,9 +162,8 @@ func (consumer *BrokerConsumer) consumeWithConn(conn *net.TCPConn, handlerFunc M
 
 	tp := consumer.broker.topics[0]
 	request := consumer.broker.EncodeConsumeRequest()
-	//log.Println(request, "  \n\t", string(request))
+	//log.Println("offset=", tp.Offset, " ", tp.MaxSize, " ", request, " ", tp.Topic, " ", tp.Partition, "  \n\t", string(request))
 	_, err = conn.Write(request)
-
 	if err != nil {
 		log.Println("Fatal Error: ", err)
 		return -1, err
@@ -173,24 +172,24 @@ func (consumer *BrokerConsumer) consumeWithConn(conn *net.TCPConn, handlerFunc M
 	reader := consumer.broker.readResponse(conn)
 
 	err = reader.ReadHeader()
-	if err != nil || reader == nil {
+	if err != nil {
 		return -1, err
 	}
-	//log.Println(reader.Size)
+	//log.Println(reader.)
 	if reader.Size > 2 {
 		// parse out the messages
 		var currentOffset uint64 = 0
 		for {
-			//log.Println("before nextMsg")
+			//log.Println("before nextMsg ", currentOffset)
 			payloadConsumed, msgs, err = reader.NextMsg(consumer.codecs)
-			//log.Println("after nxt msg", msgs,err)
+			//log.Println("after nxt msg", len(msgs), " ", payloadConsumed, " ", currentOffset)
 			if err != nil {
 				log.Println("ERROR< ", err)
 			}
 			if msgs == nil || len(msgs) == 0 {
-				// this isn't invalid as large messages might contain partial messages 
+				// this isn't invalid as net conn bytes might contain partial messages 
 				tp.Offset += currentOffset
-				//log.Println("end of message set", num)
+				//log.Println("end of message set ", tp.Offset, " ", currentOffset)
 				return num, err
 			}
 			msgOffset := tp.Offset + currentOffset
@@ -201,7 +200,9 @@ func (consumer *BrokerConsumer) consumeWithConn(conn *net.TCPConn, handlerFunc M
 				msg.offset = msgOffset
 				//msgOffset += 4 + uint64(msg.totalLength)
 				msgOffset += msg.TotalLen()
+				//log.Println("about to call handler func ", msgOffset)
 				handlerFunc(tp.Topic, tp.Partition, msg)
+				//log.Println("after handler func")
 				num += 1
 			}
 
