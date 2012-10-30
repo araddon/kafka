@@ -23,10 +23,11 @@
 package kafka
 
 import (
-	"encoding/binary"
+	//"encoding/binary"
 	"io"
 	"log"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -82,6 +83,20 @@ func (consumer *BrokerConsumer) AddCodecs(payloadCodecs []PayloadCodec) {
 	}
 }
 
+func (consumer *BrokerConsumer) handleConnError(err error, conn *net.TCPConn) error {
+	errs := err.Error()
+	if strings.HasSuffix(errs, "broken pipe") {
+		for i := 0; i < 100; i++ {
+			log.Println("Reconnecting")
+			conn, err = consumer.broker.connect()
+			if err == nil {
+				return nil
+			}
+			time.Sleep(time.Millisecond * 1000)
+		}
+	}
+	return err
+}
 func (consumer *BrokerConsumer) ConsumeOnChannel(msgChan chan *Message, pollTimeoutMs int64, quit chan bool) (int, error) {
 	conn, err := consumer.broker.connect()
 	time.Sleep(time.Duration(pollTimeoutMs) * time.Millisecond * 2)
@@ -152,29 +167,54 @@ func (consumer *BrokerConsumer) Consume(handlerFunc MessageHandlerFunc) (int, er
 	return num, err
 }
 
+func (consumer *BrokerConsumer) tryConnect(conn *net.TCPConn, tp *TopicPartition) (err error, reader *ByteBuffer) {
+	var errCode int
+	request := consumer.broker.EncodeConsumeRequest()
+	//log.Println("offset=", tp.Offset, " ", tp.MaxSize, " ", request, " ", tp.Topic, " ", tp.Partition, "  \n\t", string(request))
+	_, err = conn.Write(request)
+	if err != nil {
+		if err = consumer.handleConnError(err, conn); err != nil {
+			return err, nil
+		}
+	}
+
+	reader = consumer.broker.readResponse(conn)
+	err, errCode = reader.ReadHeader()
+	if err != nil && errCode == 1 {
+		offsetVal := getOffset(consumer.broker.hostname, tp)
+		if offsetVal > 0 {
+			// RECONNECT!
+			log.Println("RECONNECTING !!! ", offsetVal)
+			tp.Offset = offsetVal
+			if err, reader = consumer.tryConnect(conn, tp); err != nil {
+				return err, nil
+			}
+		} else {
+			return err, nil
+		}
+
+	} else if err != nil {
+		log.Println("offset=", tp.Offset, " ", tp.MaxSize, " ", request, " ", tp.Topic, " ", tp.Partition, "  \n\t", string(request))
+		return err, nil
+	}
+	return
+}
+
 func (consumer *BrokerConsumer) consumeWithConn(conn *net.TCPConn, handlerFunc MessageHandlerFunc) (num int, err error) {
 
 	var msgs []*Message
 	var payloadConsumed int
+	var reader *ByteBuffer
+
 	if len(consumer.broker.topics) > 1 {
 		return consumer.consumeMultiWithConn(conn, handlerFunc)
 	}
 
 	tp := consumer.broker.topics[0]
-	request := consumer.broker.EncodeConsumeRequest()
-	//log.Println("offset=", tp.Offset, " ", tp.MaxSize, " ", request, " ", tp.Topic, " ", tp.Partition, "  \n\t", string(request))
-	_, err = conn.Write(request)
-	if err != nil {
-		log.Println("Fatal Error: ", err)
+	if err, reader = consumer.tryConnect(conn, tp); err != nil {
 		return -1, err
 	}
 
-	reader := consumer.broker.readResponse(conn)
-
-	err = reader.ReadHeader()
-	if err != nil {
-		return -1, err
-	}
 	//log.Println(reader.)
 	if reader.Size > 2 {
 		// parse out the messages
@@ -217,18 +257,24 @@ func (consumer *BrokerConsumer) consumeWithConn(conn *net.TCPConn, handlerFunc M
 
 func (consumer *BrokerConsumer) consumeMultiWithConn(conn *net.TCPConn, handlerFunc MessageHandlerFunc) (num int, err error) {
 
+	var errCode int
 	_, err = conn.Write(consumer.broker.EncodeConsumeRequestMultiFetch())
 
 	if err != nil {
-		log.Println("Fatal Error: ", err)
-		return -1, err
+		if err = consumer.handleConnError(err, conn); err != nil {
+			return -1, err
+		}
 	}
 	log.Println("about to call read multi response")
 	reader := consumer.broker.readMultiResponse(conn)
 	log.Println("after call")
-	err = reader.ReadHeader()
+	err, errCode = reader.ReadHeader()
 	log.Println("after read header", err)
-	if err != nil {
+	if err != nil && errCode == 1 {
+		// RECONNECT!
+		log.Println("ERROR, bad offsetIds")
+		return -1, err
+	} else if err != nil {
 		log.Println("Fatal Error: ", err)
 		return -1, err
 	}
@@ -302,32 +348,44 @@ func (consumer *BrokerConsumer) GetOffsets(time int64, maxNumOffsets uint32) ([]
 
 	conn, err := consumer.broker.connect()
 	if err != nil {
+		log.Println("ERROR ", err)
 		return offsets, err
 	}
 
 	defer conn.Close()
 
-	_, err = conn.Write(consumer.broker.EncodeOffsetRequest(time, maxNumOffsets))
+	offsetRequest := consumer.broker.EncodeOffsetRequest(time, maxNumOffsets)
+	_, err = conn.Write(offsetRequest)
 	if err != nil {
+		log.Println("ERROR ", err)
 		return offsets, err
 	}
 
 	reader := consumer.broker.readResponse(conn)
-	payload, err := reader.Payload()
+	err, _ = reader.ReadHeader()
 	if err != nil {
+		log.Println("HEADER ERROR ", err)
+		return offsets, err
+	}
+	offsets, err = reader.Offsets()
+	//log.Println("offsets Ct= ", len(offsets), " size=", reader.Size)
+	if err != nil {
+		log.Println("ERROR ", err)
 		return offsets, err
 	}
 
-	if len(payload) > 4 {
-		// get the number of offsets
-		numOffsets := binary.BigEndian.Uint32(payload[0:])
-		var currentOffset uint64 = 4
-		for currentOffset < uint64(len(payload)-4) && uint32(len(offsets)) < numOffsets {
-			offset := binary.BigEndian.Uint64(payload[currentOffset:])
-			offsets = append(offsets, offset)
-			currentOffset += 8 // offset size
-		}
-	}
-
 	return offsets, err
+}
+
+func getOffset(hostname string, tp *TopicPartition) uint64 {
+	broker := NewBrokerOffsetConsumer(hostname, tp.Topic, tp.Partition)
+
+	offsets, err := broker.GetOffsets(-2, uint32(1))
+	if err != nil {
+		log.Println("Error: ", err)
+	}
+	if len(offsets) == 1 {
+		return offsets[0]
+	}
+	return 0
 }

@@ -44,8 +44,8 @@ func init() {
 
 func main() {
 	flag.Parse()
-	fmt.Println("Offsets :")
-	fmt.Printf("From: %s, topic: %s, partition: %d\n", hostname, topic, partition)
+	fmt.Println("Fetching Offsets :")
+	fmt.Printf("From: %s, topic: %s, partition: %d, time: %d\n", hostname, topic, partition, time)
 	fmt.Println(" ---------------------- ")
 	broker := kafka.NewBrokerOffsetConsumer(hostname, topic, partition)
 

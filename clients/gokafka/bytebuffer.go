@@ -106,19 +106,19 @@ func (b *ByteBuffer) firstRead() (uint32, uint16, error) {
 
 // initial read of a multi-set response, this will read total len
 //  (first 4 bytes) and # of sets
-func (b *ByteBuffer) ReadHeader() error {
+func (b *ByteBuffer) ReadHeader() (error, int) {
 
 	size, errorCode, err := b.firstRead()
 	if err != nil {
-		return err
+		return err, int(errorCode)
 	}
 
 	if errorCode == 0 {
 		b.consumed = 2
 		b.Size = size
-		return nil
+		return nil, 0
 	}
-	return errors.New("could not read header")
+	return errors.New(fmt.Sprintf("could not read header %d", errorCode)), int(errorCode)
 }
 
 // Read the length and error for this set (message/offset)
@@ -206,6 +206,7 @@ func (b *ByteBuffer) Payload() ([]byte, error) {
 	expectedLength := binary.BigEndian.Uint32(length)
 	payload := make([]byte, expectedLength)
 	lenRead, err = io.ReadFull(b.reader, payload)
+	//log.Println("lenbytes = ", length)
 	if err != nil {
 		return []byte{}, err
 	}
@@ -214,4 +215,33 @@ func (b *ByteBuffer) Payload() ([]byte, error) {
 	}
 	return payload, err
 
+}
+
+func (b *ByteBuffer) Offsets() ([]uint64, error) {
+
+	var err error
+	offsets := make([]uint64, 0)
+
+	length := make([]byte, 4)
+	lenRead, err := io.ReadFull(b.reader, length)
+	if err != nil {
+		log.Println("invalid socket read ", err)
+		return offsets, err
+	}
+	if lenRead != 4 || lenRead < 0 {
+		return offsets, errors.New("invalid length of the packet length field")
+	}
+
+	offsetCt := binary.BigEndian.Uint32(length)
+	if offsetCt > 0 {
+		for i := 0; i < int(offsetCt); i++ {
+			offset := make([]byte, 8)
+			lenRead, err := io.ReadFull(b.reader, offset)
+			if lenRead == 8 && err == nil {
+				offsetVal := binary.BigEndian.Uint64(offset)
+				offsets = append(offsets, offsetVal)
+			}
+		}
+	}
+	return offsets, err
 }
