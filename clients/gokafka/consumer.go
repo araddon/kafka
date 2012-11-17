@@ -181,7 +181,8 @@ func (consumer *BrokerConsumer) tryConnect(conn *net.TCPConn, tp *TopicPartition
 	reader = consumer.broker.readResponse(conn)
 	err, errCode = reader.ReadHeader()
 	if err != nil && errCode == 1 {
-		offsetVal := getOffset(consumer.broker.hostname, tp)
+		// Error Code 1 means bad offsetid, we shold get a good offset, and reconnect!
+		offsetVal := GetOffset(consumer.broker.hostname, tp)
 		if offsetVal > 0 {
 			// RECONNECT!
 			log.Println("RECONNECTING !!! ", offsetVal)
@@ -194,7 +195,7 @@ func (consumer *BrokerConsumer) tryConnect(conn *net.TCPConn, tp *TopicPartition
 		}
 
 	} else if err != nil {
-		log.Println("offset=", tp.Offset, " ", tp.MaxSize, " ", request, " ", tp.Topic, " ", tp.Partition, "  \n\t", string(request))
+		log.Println("offset=", tp.Offset, " ", tp.MaxSize, " ", err.Error(), " ", request, " ", tp.Topic, " ", tp.Partition, "  \n\t", string(request))
 		return err, nil
 	}
 	return
@@ -377,7 +378,8 @@ func (consumer *BrokerConsumer) GetOffsets(time int64, maxNumOffsets uint32) ([]
 	return offsets, err
 }
 
-func getOffset(hostname string, tp *TopicPartition) uint64 {
+// Get an offset for given host, TopicPartition
+func GetOffset(hostname string, tp *TopicPartition) uint64 {
 	broker := NewBrokerOffsetConsumer(hostname, tp.Topic, tp.Partition)
 
 	offsets, err := broker.GetOffsets(-2, uint32(1))
