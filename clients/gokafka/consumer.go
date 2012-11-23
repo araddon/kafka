@@ -106,25 +106,37 @@ func (consumer *BrokerConsumer) ConsumeOnChannel(msgChan chan *Message, pollTime
 	}
 
 	num := 0
+	pollMsgs := 0
 	errCt := 0
 	done := make(chan bool, 1)
 	isDone := false
+	pollDuration := time.Duration(pollTimeoutMs) * time.Millisecond
 	go func() {
 		for {
 			if isDone {
 				return
 			}
+			ts := time.Now()
 			//tp := consumer.broker.topics[0]
+			// TODO:  This Poll Timeout is pretty flawed, as the actual consume could take more than x
+			//         IT should take ts = time.Now() before consume, then after check delta
 			//log.Println("about to poll for consume ", pollTimeoutMs)
 			_, err := consumer.consumeWithConn(conn, func(topic string, partition int, msg *Message) {
 				msgChan <- msg
 				num += 1
+				pollMsgs += 1
 			})
 
 			if err != nil {
 				if err != io.EOF {
-					log.Println("Fatal Error: ", err)
+					log.Println("Fatal Error: ", errCt, " ", err)
 					errCt++
+					time.Sleep(time.Duration(pollTimeoutMs+int64(errCt)) * time.Millisecond)
+					if errCt%10 == 0 {
+						// lets try reconnecting?
+						conn, err = consumer.broker.connect()
+						log.Println(err)
+					}
 					//panic(err)
 					//quit <- true // force quit
 				}
@@ -135,7 +147,13 @@ func (consumer *BrokerConsumer) ConsumeOnChannel(msgChan chan *Message, pollTime
 				panic(err)
 			}
 
-			time.Sleep(time.Duration(pollTimeoutMs) * time.Millisecond)
+			ta := time.Now()
+			//log.Println("After Consume ", pollMsgs, " ", ta.Sub(ts))
+			//log.Println("after? ", !ta.After(ts.Add(pollDuration)))
+			if !ta.After(ts.Add(pollDuration)) {
+				//d := ts.Add(pollDuration)
+				time.Sleep(pollDuration)
+			}
 		}
 		//log.Println("got done signal in loop1")
 		done <- true
@@ -181,6 +199,7 @@ func (consumer *BrokerConsumer) tryConnect(conn *net.TCPConn, tp *TopicPartition
 	reader = consumer.broker.readResponse(conn)
 	err, errCode = reader.ReadHeader()
 	if err != nil && errCode == 1 {
+		log.Println("Bad Offset id, resetting?")
 		// Error Code 1 means bad offsetid, we shold get a good offset, and reconnect!
 		offsetVal := GetOffset(consumer.broker.hostname, tp)
 		if offsetVal > 0 {
@@ -241,6 +260,7 @@ func (consumer *BrokerConsumer) consumeWithConn(conn *net.TCPConn, handlerFunc M
 				msg.offset = msgOffset
 				//msgOffset += 4 + uint64(msg.totalLength)
 				msgOffset += msg.TotalLen()
+				//log.Println("end of message set ", msgOffset)
 				//log.Println("about to call handler func ", msgOffset)
 				handlerFunc(tp.Topic, tp.Partition, msg)
 				//log.Println("after handler func")
@@ -369,7 +389,7 @@ func (consumer *BrokerConsumer) GetOffsets(time int64, maxNumOffsets uint32) ([]
 		return offsets, err
 	}
 	offsets, err = reader.Offsets()
-	//log.Println("offsets Ct= ", len(offsets), " size=", reader.Size)
+	//log.Println(time, " offsets Ct= ", len(offsets), " size=", reader.Size, " offsets =", offsets, " ", err)
 	if err != nil {
 		log.Println("ERROR ", err)
 		return offsets, err
@@ -378,15 +398,28 @@ func (consumer *BrokerConsumer) GetOffsets(time int64, maxNumOffsets uint32) ([]
 	return offsets, err
 }
 
-// Get an offset for given host, TopicPartition
+// Get the minimum offset for given host, TopicPartition
 func GetOffset(hostname string, tp *TopicPartition) uint64 {
-	broker := NewBrokerOffsetConsumer(hostname, tp.Topic, tp.Partition)
+	return getOffset(hostname, -2, tp)
+}
 
-	offsets, err := broker.GetOffsets(-2, uint32(1))
+// Get the max offset for given host, TopicPartition
+func GetMaxOffset(hostname string, tp *TopicPartition) uint64 {
+	return getOffset(hostname, -1, tp)
+}
+
+// Get an offset for given host, TopicPartition
+func getOffset(hostname string, offsetTime int64, tp *TopicPartition) uint64 {
+	broker := NewBrokerOffsetConsumer(hostname, tp.Topic, tp.Partition)
+	//log.Printf("h=%s t=%s Partition=%d \n", hostname, tp.Topic, tp.Partition)
+	offsets, err := broker.GetOffsets(offsetTime, uint32(1))
 	if err != nil {
 		log.Println("Error: ", err)
 	}
 	if len(offsets) == 1 {
+		return offsets[0]
+	} else if len(offsets) > 1 {
+		//log.Println("offsets?: ", offsets)
 		return offsets[0]
 	}
 	return 0
