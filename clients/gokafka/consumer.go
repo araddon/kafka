@@ -125,29 +125,31 @@ func (consumer *BrokerConsumer) ConsumeOnChannel(msgChan chan *Message, pollTime
 				msgChan <- msg
 				num += 1
 				pollMsgs += 1
+				errCt = 0
 			})
 
 			if err != nil {
 				if err != io.EOF {
-					log.Println("Fatal Error: ", errCt, " ", err)
 					errCt++
-					time.Sleep(time.Duration(pollTimeoutMs+int64(errCt)) * time.Millisecond)
-					if errCt%10 == 0 {
-						// lets try reconnecting?
-						conn, err = consumer.broker.connect()
-						log.Println(err)
-					}
-					//panic(err)
+					time.Sleep(time.Duration(pollTimeoutMs+int64(15)) * time.Millisecond)
+					// lets try reconnecting?
+					conn, err = consumer.broker.connect()
+					log.Println("Connection Error? ", errCt, " ", err, " fixed? ")
 					//quit <- true // force quit
+				} else {
+					// expected error, EOF is no data from kafka server?
+					log.Println("EOF? Error: ", errCt, " ", err)
 				}
-			} else {
-				errCt -= 2
 			}
 			if errCt > 50 {
+				// TODO, most of the errors i have seen can be "fixed" by sleeping ^ reconnecting above
+				// which will cause err ct to get reset if it returns a message
 				panic(err)
 			}
 
 			ta := time.Now()
+			// given amount of time we were reading this message set, may be ready
+			// for another poll now.
 			//log.Println("After Consume ", pollMsgs, " ", ta.Sub(ts))
 			//log.Println("after? ", !ta.After(ts.Add(pollDuration)))
 			if !ta.After(ts.Add(pollDuration)) {
@@ -155,9 +157,7 @@ func (consumer *BrokerConsumer) ConsumeOnChannel(msgChan chan *Message, pollTime
 				time.Sleep(pollDuration)
 			}
 		}
-		//log.Println("got done signal in loop1")
 		done <- true
-		//log.Println("got done signal in loop2")
 	}()
 	// wait to be told to stop..
 	<-quit
@@ -214,7 +214,7 @@ func (consumer *BrokerConsumer) tryConnect(conn *net.TCPConn, tp *TopicPartition
 		}
 
 	} else if err != nil {
-		log.Println("offset=", tp.Offset, " ", tp.MaxSize, " ", err.Error(), " ", request, " ", tp.Topic, " ", tp.Partition, "  \n\t", string(request))
+		//log.Println("offset=", tp.Offset, " ", tp.MaxSize, " ", err.Error(), " ", request, " ", tp.Topic, " ", tp.Partition, "  \n\t", string(request))
 		return err, nil
 	}
 	return
