@@ -116,7 +116,7 @@ func (b *Broker) connect() (conn *net.TCPConn, er error) {
 	}
 	conn, err = net.DialTCP(NETWORK, nil, raddr)
 	if err != nil {
-		log.Println("Fatal Error: ", raddr, " ", err)
+		log.Println("Fatal Error: ", b.hostname, " ", err)
 		return nil, err
 	}
 	return conn, er

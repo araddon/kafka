@@ -25,6 +25,7 @@ package kafka
 import (
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -136,9 +137,11 @@ func (b *BrokerPublisher) PublishOnChannel(msgChan chan *MessageTopic, bufferMax
 // uses a partitioner to choose partition
 func NewBufferedSender(broker *Broker, bufferMaxMs int64, bufferMaxSize int) (MessageSender, *net.TCPConn, error) {
 
-	conn, err := broker.connect()
-	if err != nil {
-		return nil, nil, err
+	conn, connErr := broker.connect()
+	if connErr != nil {
+		// We are not returning, as we will keep trying to connect
+		log.Println("FATAL ERROR, could not connect ", connErr)
+		//return nil, nil, connErr
 	}
 
 	msgBuffer := make(ProduceRequest)
@@ -157,10 +160,9 @@ func NewBufferedSender(broker *Broker, bufferMaxMs int64, bufferMaxSize int) (Me
 		msgCt = 0
 		msgBuffer = make(ProduceRequest)
 		msgMu.Unlock()
-		var err error
 		//if msgBufCopy.MultiPart() {
 		request := broker.EncodeMultiProduceRequest(&msgBufCopy)
-		_, err = conn.Write(request)
+		_, err := conn.Write(request)
 		//} else {
 		//  for _, partMsgs := range msgBufCopy {
 		//    for _, msgs := range partMsgs {
@@ -171,8 +173,18 @@ func NewBufferedSender(broker *Broker, bufferMaxMs int64, bufferMaxSize int) (Me
 		//}
 
 		if err != nil {
-			// TODO, reconnect?  
-			log.Println("potentially fatal error?", err)
+			//write tcp 192.168.1.25:9092: broken pipe
+			if strings.Contains(err.Error(), "broken pipe") || strings.Contains(err.Error(), "invalid argument") {
+				// TODO:  Handle buffering and resend?
+				conn, connErr = broker.connect()
+				if connErr != nil {
+					log.Println("ERROR could not reconnect? ", connErr)
+				} else {
+					log.Println("kafka reconnected ")
+				}
+			} else {
+				log.Println("ERROR potentially fatal? ", err)
+			}
 		}
 	}
 
