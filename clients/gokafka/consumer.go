@@ -188,7 +188,7 @@ func (consumer *BrokerConsumer) Consume(handlerFunc MessageHandlerFunc) (int, er
 func (consumer *BrokerConsumer) tryConnect(conn *net.TCPConn, tp *TopicPartition) (err error, reader *ByteBuffer) {
 	var errCode int
 	request := consumer.broker.EncodeConsumeRequest()
-	//log.Println("offset=", tp.Offset, " ", tp.MaxSize, " ", request, " ", tp.Topic, " ", tp.Partition, "  \n\t", string(request))
+	//log.Println("offset=", tp.Offset, " ", tp.MaxSize, " ", tp.Topic, " ", tp.Partition, "  \n\t", string(request), request)
 	_, err = conn.Write(request)
 	if err != nil {
 		if err = consumer.handleConnError(err, conn); err != nil {
@@ -232,10 +232,11 @@ func (consumer *BrokerConsumer) consumeWithConn(conn *net.TCPConn, handlerFunc M
 
 	tp := consumer.broker.topics[0]
 	if err, reader = consumer.tryConnect(conn, tp); err != nil {
+		log.Println("Error, coudlnt connect ", err)
 		return -1, err
 	}
 
-	//log.Println(reader.)
+	//log.Println(reader.Size)
 	if reader.Size > 2 {
 		// parse out the messages
 		var currentOffset uint64 = 0

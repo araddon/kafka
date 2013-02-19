@@ -138,7 +138,6 @@ func (b *ByteBuffer) ReadSet() (int, error) {
 
 func (b *ByteBuffer) NextMsg(payloadCodecsMap map[byte]PayloadCodec) (int, []*Message, error) {
 	if b.Size-b.consumed < 10 {
-		//log.Println("returning, zero len?")
 		return 0, nil, nil
 	}
 
@@ -160,6 +159,7 @@ func (b *ByteBuffer) NextMsg(payloadCodecsMap map[byte]PayloadCodec) (int, []*Me
 		// this is actually an expected condition, the last message in a message 
 		// set can be a partial if more than maxsize was available
 		// but we need to read/flush out the remainig buffer on the conn
+		//log.Println("returning, to big? ", b.Size-b.consumed, " ", expectedLength)
 		bDump := make([]byte, b.Size-b.consumed)
 		_, _ = io.ReadFull(b.reader, bDump)
 		return 0, nil, nil
