@@ -141,11 +141,11 @@ func (consumer *BrokerConsumer) ConsumeOnChannel(msgChan chan *Message, pollTime
 					log.Println("EOF? Error: ", errCt, " ", err)
 				}
 			}
-			if errCt > 50 {
-				// TODO, most of the errors i have seen can be "fixed" by sleeping ^ reconnecting above
-				// which will cause err ct to get reset if it returns a message
-				panic(err)
-			}
+			//if errCt > 50 {
+			// TODO, most of the errors i have seen can be "fixed" by sleeping ^ reconnecting above
+			// which will cause err ct to get reset if it returns a message
+			//panic(err)
+			//}
 
 			ta := time.Now()
 			// given amount of time we were reading this message set, may be ready

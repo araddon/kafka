@@ -205,8 +205,8 @@ func decodeMessage(packet []byte, length uint32, payloadCodecsMap map[byte]Paylo
 	payloadChecksum := make([]byte, 4)
 	binary.BigEndian.PutUint32(payloadChecksum, crc32.ChecksumIEEE(rawPayload))
 	if !bytes.Equal(payloadChecksum, msg.checksum[:]) {
-		msg.Print()
-		log.Printf("checksum mismatch, expected: % X was: % X\n", payloadChecksum, msg.checksum[:])
+		//msg.Print()
+		//log.Printf("checksum mismatch, expected: % X was: % X\n", payloadChecksum, msg.checksum[:])
 		return nil
 	}
 	msg.payload = payloadCodecsMap[msg.compression].Decode(rawPayload)
