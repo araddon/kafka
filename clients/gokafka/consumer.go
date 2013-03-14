@@ -134,7 +134,7 @@ func (consumer *BrokerConsumer) ConsumeOnChannel(msgChan chan *Message, pollTime
 					time.Sleep(time.Duration(pollTimeoutMs+int64(15)) * time.Millisecond)
 					// lets try reconnecting?
 					conn, err = consumer.broker.connect()
-					log.Println("Connection Error? ", errCt, " ", err, " fixed? ")
+					//log.Println("Connection Error? ", errCt, " ", err, " fixed? ")
 					//quit <- true // force quit
 				} else {
 					// expected error, EOF is no data from kafka server?
@@ -232,7 +232,7 @@ func (consumer *BrokerConsumer) consumeWithConn(conn *net.TCPConn, handlerFunc M
 
 	tp := consumer.broker.topics[0]
 	if err, reader = consumer.tryConnect(conn, tp); err != nil {
-		log.Println("Error, coudlnt connect ", err)
+		//log.Println("Error, coudlnt connect ", err)
 		return -1, err
 	}
 
